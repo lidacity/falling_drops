@@ -46,15 +46,14 @@ const byte DATA_PINS[COUNT_STRIP] = { 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 };
 
 struct Parameters
 {
-  bool Enable; // включена ли лента
   byte Phase; // позиция метеора на ленте
-  byte Tick; // задержка скорости падения (loop) метеора
+  unsigned long Tick; // задержка скорости падения метеора
   byte Decrease; // уменьшение яркости каждого последующего пикселя
   //
   word Hue; // тон метеора
   byte Length; // длина метеора
-  byte Pause; // задержка (loop) метеора до следующего
-  byte Delay; // скорость падения (loop) метеора
+  unsigned long Pause; // задержка метеора до следующего вылета
+  unsigned long Delay; // скорость падения метеора
   bool Meteor; // тип метеора
   bool Direction; // направление движения метеора
 };
@@ -66,7 +65,7 @@ uint8_t Pixels[3 * COUNT_PIXELS]; // единый массив цветов
 
 void setup()
 {
-//  Serial.begin(9600);
+  //Serial.begin(9600);
   // включение дополнительных входов
   pinMode(PIN_HUE, INPUT);
   pinMode(PIN_HUE_RAND, INPUT_PULLUP);
@@ -79,7 +78,7 @@ void setup()
   pinMode(PIN_METEOR, INPUT_PULLUP);
   pinMode(PIN_DIRECTION, INPUT_PULLUP);
   // стартовая инициализация лент
-  for (byte i=0; i<=COUNT_STRIP-1; i++)
+  for (byte i=0; i<COUNT_STRIP; i++)
   {
     Led[i] = Init(0, true);
     Strip[i] = NeoPixel(Pixels, COUNT_PIXELS, DATA_PINS[i], NEO_GRB + NEO_KHZ800);
@@ -90,47 +89,36 @@ void setup()
  
 void loop()
 {
+  unsigned long Millis = millis();
   for (byte i=0; i<COUNT_STRIP; i++) // перебор лент
   {
-    if (Led[i].Tick == 0)
+    if (Millis > Led[i].Pause and Millis > Led[i].Tick) // вышла задержка до следующего вылета метеора И скорость падения метеора
     {
-      Led[i].Tick = Led[i].Delay;
-      if (Led[i].Enable) // если на ленте включён метеор
+      Led[i].Tick = Millis + Led[i].Delay;
+      //
+      Strip[i].clear();
+      if (Led[i].Phase <= COUNT_PIXELS + Led[i].Length)  // если метеор летит
       {
-        Strip[i].clear();
-        if (Led[i].Phase <= COUNT_PIXELS + Led[i].Length)  // если метеор летит
+        int Len = 255 << !Led[i].Meteor;
+        for (byte j=0; j<=Led[i].Length+1; j++)
         {
-          int Len = 255 << !Led[i].Meteor;
-          for (byte j=0; j<=Led[i].Length+1; j++)
+          short Index = Led[i].Direction ? Led[i].Phase - j : COUNT_PIXELS - (Led[i].Phase - j);
+          if ((0 <= Index) and (Index <= COUNT_PIXELS)) // метеор считается только в видимой части ленты
           {
-            short Index = Led[i].Direction ? Led[i].Phase - j : COUNT_PIXELS - (Led[i].Phase - j);
-            if ((0 <= Index) and (Index <= COUNT_PIXELS)) // метеор считается только в видимой части ленты
-            {
-              short Val = Adafruit_NeoPixel::gamma8(Led[i].Meteor ? Len : 255 - abs(Len - 255));
-              uint32_t Color = Adafruit_NeoPixel::ColorHSV(Led[i].Hue, 255, Val);
-              Strip[i].setPixelColor(Index, Color);
-            }
-            Len -= Led[i].Decrease;
+            short Val = Adafruit_NeoPixel::gamma8(Led[i].Meteor ? Len : 255 - abs(Len - 255));
+            uint32_t Color = Adafruit_NeoPixel::ColorHSV(Led[i].Hue, 255, Val);
+            Strip[i].setPixelColor(Index, Color);
           }
-          Led[i].Phase++;
+          Len -= Led[i].Decrease;
         }
-        else         
-          Led[i] = Init(Led[i].Hue, false); // если метеор вылетел за пределы
-        //
-        Strip[i].show();
+        Led[i].Phase++;
       }
-      else // иначе на ленте метеор выключён
-      {
-        if (Led[i].Pause > 0)
-          Led[i].Pause--; // то считаем длительность паузы между метеорами
-        else
-          Led[i].Enable = true; // и по окончании включаем ленту снова
-      }
+      else         
+        Led[i] = Init(Led[i].Hue, false); // если метеор вылетел за пределы
+      //
+      Strip[i].show();
     }
-    else
-      Led[i].Tick--; // если случайная скорость падения
   }
-  delay(1);
 }
 
 
@@ -159,14 +147,28 @@ int GetLength()
 }
 
 
+// вернуть задержку между вылетами метеора
+int GetPause()
+{
+  bool IsPause = digitalRead(PIN_PAUSE_RAND) == LOW;
+  if (IsPause)
+  {
+    word R = map(analogRead(PIN_PAUSE), 0, 1023, 16, 4096);
+    return random(0, R);
+  }
+  else
+    return random(4, 256) << 2;
+}
+
+
 // вернуть скорость падения метеора
 int GetDelay()
 {
   bool IsDelay = digitalRead(PIN_DELAY_RAND) == LOW;
   if (IsDelay)
-    return map(analogRead(PIN_DELAY), 0, 1023, 0, 128);
+    return map(analogRead(PIN_DELAY), 0, 1023, 0, 512);
   else
-    return random(4, 64);
+    return random(1, 32) << 2;
 }
 
 
@@ -174,20 +176,6 @@ int GetDelay()
 int IsMeteor()
 {
   return random(2) or digitalRead(PIN_METEOR) == LOW;
-}
-
-
-// вернуть задержку между вылетами метеора
-int GetPause()
-{
-  bool IsPause = digitalRead(PIN_PAUSE_RAND) == LOW;
-  if (IsPause)
-  {
-    uint16_t R = map(analogRead(PIN_PAUSE), 0, 1023, 16, 1023);
-    return random(0, R);
-  }
-  else
-    return random(16, 128);
 }
 
 
@@ -202,17 +190,17 @@ int IsDirection()
 Parameters Init(uint32_t Hue, bool Enable)
 {
   Parameters Result;
-  Result.Enable = Enable;
-  Result.Phase = 0;
   //
   Result.Hue = GetHue(Hue);
   Result.Length = GetLength();
-  Result.Pause = GetPause();
+  Result.Pause = millis() + GetPause();
   Result.Delay = GetDelay();
   Result.Meteor = IsMeteor();
   Result.Direction = IsDirection();
   //
+  Result.Phase = 0;
   Result.Tick = Result.Delay;
   Result.Decrease = (255 << !Result.Meteor) / (Result.Length + 1);
+  //
   return Result;
 }
